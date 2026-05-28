@@ -1,0 +1,23 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Output data (large files — transfer via SCP)
+judgement_count/pdf_urls.txt
+judgement_count/urls.jsonl
+judgement_count/run.log
+judgement_count/*.tmp
+
+# Keep checkpoint and summary (small, needed for resume tracking)
+!judgement_count/checkpoint.json
+!judgement_count/summary.json
+
+# macOS
+.DS_Store
+
+# Java build artifacts
+GaugeCrawlingApi/target/
+*.zip
