@@ -14,7 +14,7 @@ through the spys.one proxy pool (--use-proxies).
 
 Output (--out directory):
     pdf_urls.txt    — one PDF URL per line  (main deliverable)
-    urls.jsonl      — NDJSON with full metadata per judgment
+    urls.csv        — CSV with full metadata per judgment
     summary.json    — counts by court / year / month + grand total
     checkpoint.json — completed month-search URLs  (resume support)
 
@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import csv
 import json
 import random
 import re
@@ -37,6 +38,8 @@ import signal
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+_CSV_FIELDS = ["doc_id", "url", "pdf_url", "title", "court", "year", "month", "date_slug"]
 
 import aiohttp
 from bs4 import BeautifulSoup
@@ -292,7 +295,7 @@ async def _process_month(
     done:            set[str],
     summary:         dict,
     pdf_txt_path:    Path,
-    jsonl_path:      Path,
+    csv_path:        Path,
     summary_path:    Path,
     checkpoint_path: Path,
 ) -> None:
@@ -304,7 +307,7 @@ async def _process_month(
 
     async with write_lock:
         if records:
-            _append_jsonl(jsonl_path, records)
+            _append_csv(csv_path, records)
             _append_pdf_urls(pdf_txt_path, records)
             _record_month(summary, pm.court, pm.year, pm.month, len(records))
             _save_summary(summary_path, summary)
@@ -339,10 +342,13 @@ def _save_checkpoint(path: Path, done: set[str]) -> None:
     tmp.replace(path)
 
 
-def _append_jsonl(path: Path, records: list[dict]) -> None:
-    with path.open("a", encoding="utf-8") as f:
-        for rec in records:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+def _append_csv(path: Path, records: list[dict]) -> None:
+    write_header = not path.exists() or path.stat().st_size == 0
+    with path.open("a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=_CSV_FIELDS, extrasaction="ignore")
+        if write_header:
+            writer.writeheader()
+        writer.writerows(records)
 
 
 def _append_pdf_urls(path: Path, records: list[dict]) -> None:
@@ -351,21 +357,18 @@ def _append_pdf_urls(path: Path, records: list[dict]) -> None:
             f.write(rec["pdf_url"] + "\n")
 
 
-def _recount_from_jsonl(path: Path) -> tuple[int, dict]:
-    """Rebuild (total, by_court_year_month) from an existing urls.jsonl."""
+def _recount_from_csv(path: Path) -> tuple[int, dict]:
+    """Rebuild (total, by_court_year_month) from an existing urls.csv."""
     counts: dict[tuple[str, str, str], int] = {}
     if not path.exists():
         return 0, {}
-    with path.open(encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
+    with path.open(newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
             try:
-                rec = json.loads(line)
-                key = (rec["court"], rec["year"], rec["month"])
+                key = (row["court"], row["year"], row["month"])
                 counts[key] = counts.get(key, 0) + 1
-            except (json.JSONDecodeError, KeyError):
+            except KeyError:
                 pass
     total = sum(counts.values())
     by_court: dict[str, Any] = {}
@@ -397,12 +400,12 @@ async def run(args: argparse.Namespace) -> None:
     out.mkdir(parents=True, exist_ok=True)
 
     pdf_txt_path    = out / "pdf_urls.txt"
-    jsonl_path      = out / "urls.jsonl"
+    csv_path        = out / "urls.csv"
     summary_path    = out / "summary.json"
     checkpoint_path = out / "checkpoint.json"
 
     done = _load_checkpoint(checkpoint_path)
-    existing_total, existing_by_court = _recount_from_jsonl(jsonl_path)
+    existing_total, existing_by_court = _recount_from_csv(csv_path)
     summary: dict[str, Any] = {"total": existing_total, "by_court": existing_by_court}
     if existing_total:
         print(f"  {existing_total:,} URLs already collected from prior run(s)\n")
@@ -440,6 +443,7 @@ async def run(args: argparse.Namespace) -> None:
             years_filter=set(args.years  or []),
         )
 
+
         # Deduplicate and exclude already-checkpointed months
         claimed: set[str] = set(done)
         pending: list[_PendingMonth] = []
@@ -458,7 +462,7 @@ async def run(args: argparse.Namespace) -> None:
         tasks = [
             asyncio.create_task(_process_month(
                 session, sem, proxy_pool, write_lock, stop, pm,
-                done, summary, pdf_txt_path, jsonl_path, summary_path, checkpoint_path,
+                done, summary, pdf_txt_path, csv_path, summary_path, checkpoint_path,
             ))
             for pm in pending
         ]
@@ -471,7 +475,7 @@ async def run(args: argparse.Namespace) -> None:
     print(f"  Total judgments found : {summary['total']:,}")
     print(f"  Courts processed      : {len(summary['by_court'])}")
     print(f"  PDF URLs (flat list)  : {pdf_txt_path}")
-    print(f"  Full records (NDJSON) : {jsonl_path}")
+    print(f"  Full records (CSV)    : {csv_path}")
     print(f"  Summary               : {summary_path}")
 
     _save_checkpoint(checkpoint_path, done)

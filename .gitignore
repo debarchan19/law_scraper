@@ -8,6 +8,7 @@ __pycache__/
 # Output data (large files — transfer via SCP)
 judgement_count/pdf_urls.txt
 judgement_count/urls.jsonl
+judgement_count/urls.csv
 judgement_count/run.log
 judgement_count/*.tmp
 
